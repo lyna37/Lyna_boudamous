@@ -1,0 +1,469 @@
+---
+title:  "Analyse de l'Offre culturelle en France"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    theme: cerulean
+runtime: shiny
+---
+
+<style>
+  /* Fond bordeaux clair pour toute la page */
+  body {
+    background-color: lightblue; /* Bleu clair */
+    margin: 0;
+    height: 100vh; /* Hauteur complète de la fenêtre */
+  }
+  /* Fond blanc pour les cartes */
+  .card {
+    background-color: white !important; /* Fond blanc pour les cartes (graphique) */
+    border: none; /* Enlève la bordure de la carte */
+  }
+</style>
+
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dplyr)
+library(leaflet)
+library(leaflet.extras)  
+library(sf)
+library(stringr)
+library(shiny)
+library(ggplot2)
+library(highcharter)
+library(RColorBrewer)
+library(rcartocolor)
+library(fontawesome)
+library(DT)
+library(plotly)
+library(readr)
+library(tidyr)
+library(forcats)
+library(highcharter)
+library(readr)
+
+dt <- read.csv("base-des-lieux-et-des-equipements-culturels.csv", sep = ";", header = TRUE, dec = " ",fileEncoding = "UTF8")
+
+adresses<-read.csv("adresses-des-bibliotheques-publiques.csv", sep = ";", header = TRUE, dec = " ", fileEncoding = "ISO-8859-1")
+
+population <- adresses[, c(8, 10, 11, 12)]
+
+df <- read.csv("festivals-global-festivals.csv", sep = ";", header = TRUE)
+
+dt1 <- suppressMessages(read_delim("culturecheznous.csv", 
+                                    delim = ";", 
+                                    col_names = TRUE, 
+                                    locale = locale(decimal_mark = ","), 
+                                    show_col_types = FALSE))
+```
+
+
+
+```{r}
+dt$Type.équipement.ou.lieu[dt$Type.équipement.ou.lieu %in% c("Opéra","Théâtre","Scène")] <- "Théâtre, Opéra et Scène"
+dt$Type.équipement.ou.lieu[dt$Type.équipement.ou.lieu %in% c("Centre culturel","Centre d'art","Centre de création artistique","Centre de création musicale","Conservatoire")] <- "Centre culturel et Conservatoire"
+
+
+data_clean <- dt %>%
+  filter(!Type.équipement.ou.lieu %in% c("Parc et jardin", "Espace protégé", "Établissement d'enseignement supérieur", "Lieu de mémoire", "Lieu archéologique", "Service d'archives","Monument","Librairie"))
+```
+
+
+# Offre physique permanente
+Column {data-width=150}
+-----------------------------------------------------------------------
+
+```{r}
+equipment_counts <- data_clean %>%
+  group_by(Type.équipement.ou.lieu) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(desc(count))  
+
+total_count <- sum(equipment_counts$count)
+
+emojis <- c(
+  "Musée" = "🖼️️", 
+  "Cinéma" = "🎬🍿", 
+  "Théâtre, Opéra et Scène" = "🎭🎵", 
+  "Centre culturel et Conservatoire" = "🎨🎻", 
+  "Bibliothèque" = "📚"  
+)
+
+output$equipment_counts <- renderUI({
+  tags$div(
+    style = "padding: 15px; border-radius: 8px; position: relative;",  
+    tags$div(
+      style = "text-align: center; margin-bottom: 20px;",  
+      tags$p(
+        style = "font-size: 16px; margin: 0; color: #000;",  
+        tags$span(
+          style = "font-size: 20px; color: #000; text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.4);",  
+          "Équipements culturels :" 
+        ),
+        tags$span(
+          style = "font-size: 24px; font-weight: bold; color: #000;",  
+          total_count
+        )
+      )
+    ),
+    lapply(1:nrow(equipment_counts), function(i) {
+     
+      emoji <- emojis[equipment_counts$Type.équipement.ou.lieu[i]]
+      if (is.na(emoji)) {
+        emoji <- "❓"  
+      }
+      
+      case_id <- paste0("case_", i)
+
+      tags$div(
+        id = case_id,  
+        style = "background-color: #f9f9f9; border: 1px solid #ccc; margin-bottom: 10px; padding: 9px; border-radius: 5px; text-align: center; box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2); transition: transform 0.2s, box-shadow 0.2s;",  
+        tags$p(
+          style = "font-size: 16px; margin: 0; color: #000;",  
+          paste(emoji, equipment_counts$Type.équipement.ou.lieu[i])  
+        ),
+        tags$p(
+          style = "font-size: 24px; font-weight: bold; margin: 0; color: #000;",  
+          equipment_counts$count[i]  
+        ),
+        tags$style(HTML(paste0("
+          #", case_id, ":hover {
+            transform: scale(1.02);
+            box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.3);
+          }
+        ")))
+      )
+    })
+  )
+})
+
+uiOutput("equipment_counts")
+
+```
+
+
+Column {data-width=420}
+-----------------------------------------------------------------------
+
+### **Répartition des types d'équipements culturels**
+
+```{r}
+data_summary <- data_clean %>%
+  group_by(Type.équipement.ou.lieu) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  mutate(percentage = round(100 * count / sum(count), 1))%>%
+  arrange(desc(percentage))  
+
+tropic_colors <- carto_pal(n = length(unique(data_summary$Type.équipement.ou.lieu)), name = "SunsetDark")
+
+hchart(data_summary, "pie", hcaes(name = Type.équipement.ou.lieu, y = percentage)) %>%
+  hc_colors(tropic_colors) %>%  
+  hc_tooltip(pointFormat = "<b>{point.name}</b>: {point.percentage:.1f}%")
+```
+
+### **Ratio d'équipements pour 100 000 habitants par région**
+
+```{r}
+population_unique <- population %>%
+  distinct()  
+
+population_par_region <- population_unique %>%
+  group_by(region) %>%
+  summarise(population_totale = sum(population_commune, na.rm = TRUE))  
+
+write.csv(population_par_region, "population_par_region.csv", row.names = FALSE)
+
+equipements_par_region <- data_clean %>%
+  group_by(Région) %>%
+  summarise(nb_equipements = n())  
+equipements_par_region <- equipements_par_region %>%
+  rename(region = Région)
+
+equipement_population <- merge(equipements_par_region, population_par_region, by = "region")
+
+equipement_population <- equipement_population %>%
+  mutate(ratio_equipements_par_100000_habitants = round((nb_equipements / population_totale) * 100000))
+
+equipement_population <- equipement_population %>%
+  arrange(desc(ratio_equipements_par_100000_habitants)) 
+
+datatable(
+  equipement_population,
+  options = list(
+    pageLength = 10,         
+    searching = FALSE,       
+    paging = FALSE,          
+    scrollY = "300px",       
+    dom = 't',               
+    columnDefs = list(list(className = 'dt-center', targets = "_all"))  
+  ),
+  rownames = FALSE,         
+  colnames = c("Région", "Nombre d'Équipements", "Population Totale", "Équipements pour 100 000 Habitants")
+) %>%
+  formatStyle(
+    columns = "ratio_equipements_par_100000_habitants",  
+    backgroundColor = "#FFEDA0",                        
+    textAlign = 'center'                                   
+  )
+```
+
+
+Column {data-width=450}
+-----------------------------------------------------------------------
+### **Nombre d'équipements culturels en France par région**
+
+```{r}
+france_map <- st_read("https://france-geojson.gregoiredavid.fr/repo/regions.geojson", quiet = TRUE)
+
+normalize_name <- function(name) {
+  name %>%
+    str_replace_all("[[:punct:]]", "") %>%
+    str_replace_all(" ", "") %>%
+    iconv(from = "UTF-8", to = "ASCII//TRANSLIT")  
+}
+
+data_clean$Région <- normalize_name(data_clean$Région)
+france_map$nom <- normalize_name(france_map$nom)
+
+output$map <- renderLeaflet({
+  filtered_data <- data_clean %>%
+    filter(Type.équipement.ou.lieu %in% input$type_select)
+
+  if (nrow(filtered_data) == 0) {
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 2.3522, lat = 46.6034, zoom = 5) %>%
+      addProviderTiles("OpenStreetMap")
+  } else {
+    region_counts <- filtered_data %>%
+      group_by(Région) %>%
+      summarise(total = n(), .groups = 'drop')
+
+    france_map_counts <- france_map %>%
+      left_join(region_counts, by = c("nom" = "Région"))  
+
+    pal <- colorNumeric(palette = "YlOrRd", domain = france_map_counts$total)
+
+    leaflet(data = france_map_counts) %>%
+      addTiles() %>%
+      addPolygons(
+        fillColor = ~pal(total), 
+        weight = 2,
+        opacity = 1,
+        color = "white",
+        dashArray = "3",
+        fillOpacity = 0.7,
+        highlightOptions = highlightOptions(
+          weight = 5,
+          color = "#666",
+          fillOpacity = 0.7,
+          bringToFront = TRUE
+        ),
+        label = ~paste(nom, ": ", total, " équipements"),
+        labelOptions = labelOptions(
+          style = list("font-weight" = "normal", padding = "3px 8px"),
+          textsize = "15px",
+          direction = "auto"
+        )
+      ) %>%
+      addLegend(
+        pal = pal, 
+        values = ~total, 
+        opacity = 0.7, 
+        title = "Nombre d'équipements",
+        position = "bottomright"
+      ) %>%
+      setView(lng = 3.7, lat = 46.6034, zoom = 5) %>%
+      addProviderTiles("OpenStreetMap")
+  }
+})
+
+absolutePanel(
+  top = 10, right = 10, draggable = TRUE, 
+  style = "background-color: white; padding: 10px; border-radius: 8px; z-index: 1000; width: 160px; height: 225px;",  
+  checkboxGroupInput("type_select", "Sélectionnez les types d'équipements :", 
+                     choices = unique(data_clean$Type.équipement.ou.lieu), 
+                     selected = unique(data_clean$Type.équipement.ou.lieu))
+)
+
+leafletOutput("map", height = 600)
+
+tags$style(HTML("
+  .leaflet-control.legend {
+    background-color: white;
+    width: 120px; /* Ajustez la largeur ici */
+    border-radius: 5px;
+    padding: 5px;
+  }
+"))
+
+```
+
+# Autres types d'offres
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+### **Nombre de festivals par région et par discipline**
+
+```{r}
+df_clean <- df %>%
+  select(Région.principale.de.déroulement, Discipline.dominante) %>%
+  filter(!is.na(Région.principale.de.déroulement), 
+         !is.na(Discipline.dominante),
+         !Région.principale.de.déroulement %in% c("Nouvelle-Calédonie", "Polynésie française", "Saint-Barthélemy", "Saint-Pierre-et-Miquelon"))  
+
+festival_counts <- df_clean %>%
+  group_by(Région.principale.de.déroulement, Discipline.dominante) %>%
+  summarise(Effectifs = n(), .groups = 'drop')  
+
+festival_counts_ordered <- festival_counts %>%
+  group_by(Région.principale.de.déroulement) %>%
+  summarise(total_count = sum(Effectifs), .groups = 'drop') %>%
+  arrange(total_count)  
+
+festival_counts_ordered$Région.principale.de.déroulement <- factor(
+  festival_counts_ordered$Région.principale.de.déroulement,
+  levels = festival_counts_ordered$Région.principale.de.déroulement)
+
+festival_counts <- festival_counts %>%
+  left_join(festival_counts_ordered %>% select(Région.principale.de.déroulement, total_count), 
+            by = "Région.principale.de.déroulement")
+
+festival_counts$Région.principale.de.déroulement <- factor(
+  festival_counts$Région.principale.de.déroulement,
+  levels = festival_counts_ordered$Région.principale.de.déroulement
+)
+
+p <- ggplot(festival_counts, aes(x = Région.principale.de.déroulement, y = Effectifs, fill = Discipline.dominante)) +
+  geom_bar(stat = "identity") +
+  coord_flip() + 
+  labs(title = NULL, 
+       x = "",
+       y = "",
+       fill = "Discipline dominante") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  
+        legend.position = "bottom",   
+        legend.box = "horizontal",     
+        plot.margin = margin(t = 20, r = 20, b = 100, l = 20)) +  
+  scale_fill_manual(values = c("#FF5733", "#FFC300", "#DAF7A6", "#C70039", "#900C3F", "#581845", "#1C2833"))  
+
+ggplotly(p, tooltip = c("Discipline.dominante", "Effectifs")) %>%
+  layout(legend = list(orientation = "h", yanchor = "top", y = -0.3)) 
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### **Nombre d'activités numériques proposées**
+
+```{r}
+dt1 <- dt1 %>%
+  rename(activite_proposee = "activite_proposee_apprendre_se_divertir_s_informer")
+dt1$activite_proposee[dt1$activite_proposee %in% c("Partager ses passions")] <- "Arts"
+
+summary_data <- dt1 %>%
+  count(activite_proposee, name = "effectifs") %>%  
+  arrange(effectifs)  
+
+gg <- ggplot(summary_data, 
+             aes(x = fct_reorder(activite_proposee, effectifs), 
+                 y = effectifs, 
+                 fill = effectifs,
+                 text = paste("Activité proposée :", activite_proposee, "<br>Effectifs :",     effectifs))) +  
+  geom_bar(stat = "identity") +  
+  coord_flip() +  
+  scale_fill_gradient(low = "lightgreen", high = "darkgreen", guide = "none") + 
+  theme_minimal() + 
+  theme(
+    axis.title.y = element_blank(),  
+    axis.text.y = element_text(size = 10),  
+    axis.text.x = element_text(size = 10), 
+    plot.margin = margin(10, 10, 10, 10),  
+    plot.title = element_blank()  
+  ) +
+  labs(x = "Effectifs",  
+       y = NULL)         
+
+ggplotly(gg, tooltip = "text")
+```
+
+### **Comparaison des différents types d'offres culturelles**
+
+```{r}
+nombre_activites <- nrow(dt1)
+nombre_types_equipements <- nrow(data_clean)
+nombre_festivals <- nrow(df)
+```
+
+
+```{r}
+data_summary <- data.frame(
+  Category = c("Offre numérique", "Offre physique permanante", "Offre éphémère (Festivals)"),
+  Count = c(nombre_activites, nombre_types_equipements, nombre_festivals)  
+) %>%
+  mutate(percentage = round(100 * Count / sum(Count), 1)) %>% 
+  arrange(desc(percentage))  
+
+custom_colors <- c("#FED976", "#900C3F", "#7ED957")  
+
+hchart(data_summary, "pie", hcaes(name = Category, y = Count)) %>%
+  hc_tooltip(pointFormat = "<b>{point.name}</b>: {point.percentage:.1f}%") %>%
+  hc_plotOptions(pie = list(
+    dataLabels = list(enabled = TRUE, format = '{point.name}: {point.percentage:.1f}%'),
+    innerSize = '60%',  
+    allowPointSelect = TRUE,
+    showInLegend = FALSE,
+    states = list(
+      hover = list(enabled = TRUE),
+      select = list(enabled = TRUE)
+    )
+  )) %>%
+  hc_colors(custom_colors) %>%  
+  hc_legend(enabled = FALSE)  
+```
+
+
+# Ressources Utilisées
+
+### **Présentation du projet**
+
+Actuellement étudiantes en Master 1 d'Économie de l'Entreprise et des Marchés [(Mécen)](https://mecen.univ-tours.fr/) à l’[Université de Tours](https://www.univ-tours.fr/), nous **Rousseau Nora** et **Boudamous Lyna** avons participé au challenge d'[Open Data University](https://www.opendatauniversity.org/) à l'initiative de notre professeure **Mme Scholler**, dans le cadre de son cours de **Datamining**. 
+
+Nous avons choisis de travailler sur la thématique : Offre culturel en France.
+
+**Contexte :**
+
+En 2019, la France comptait 21 600 équipements culturels, tels que des bibliothèques, théâtres, musées, cinémas, etc. Malheureusement, cette richesse culturelle est méconnue de beaucoup.
+
+Ce Dashboard a donc pour objectif d’offrir aux citoyens une meilleure visibilité sur les lieux, activités et œuvres disponibles, tout en montrant les inégalités d'offres culturelles suivant les zones géographiques, ce qui vise à aider les collectivités territoriales à concevoir des stratégies d'aménagement culturel plus efficaces.
+
+
+
+### **Ressources utilisées pour le Dashboard**
+
+```{r}
+resources <- data.frame(
+  `Bases de données` = c("Base des lieux et équipements culturels", 
+                         "Liste des festivals en France", 
+                         "CulturechezNous", 
+                         "Adresses des bibliothèques publiques"),
+  Liens = c("https://defis.data.gouv.fr/datasets/61777ddaa9101d073e5506cd", 
+            "https://defis.data.gouv.fr/datasets/62cf95993d99f22480f49334", 
+            "https://defis.data.gouv.fr/datasets/5eed8a0711125060874fc1c2",
+            "https://defis.data.gouv.fr/datasets/5c3538da9ce2e7459c6d765a"),
+  stringsAsFactors = FALSE, 
+  check.names = FALSE 
+)
+
+resources$Liens <- paste0('<a href="', resources$Liens, '" target="_blank">', resources$Liens, '</a>')
+
+datatable(resources, escape = FALSE, options = list(dom = 't'), rownames = FALSE) %>%
+  formatStyle(
+    'Liens',
+    target = 'row'
+  )
+```
+
